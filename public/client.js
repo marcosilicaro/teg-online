@@ -19,8 +19,10 @@
   let lastTurnPid = null;  // para detectar cambios de turno (notificaciones)
   let selCards = new Set();
   let unreadChat = 0;
-  let diceQueue = [];
-  let diceShowing = false;
+  let diceQueue = [];       // ataques pendientes de mostrar
+  let diceTimer = null;     // temporizador del dado en pantalla
+  const DICE_MIN = 1900;    // mínimo de pantalla por dado
+  const DICE_MAX = 3000;    // duración del último dado si no hay más en cola
 
   const session = {
     load() { try { return JSON.parse(localStorage.getItem('teg-session')) || null; } catch (e) { return null; } },
@@ -235,7 +237,6 @@
       const title = svgEl('title', {});
       title.textContent = c.name;
       g.appendChild(title);
-      g.addEventListener('click', (e) => { e.stopPropagation(); onCountryTap(c.id); });
       gCountries.appendChild(g);
       countryEls[c.id] = g;
     }
@@ -324,8 +325,15 @@
   }
   map.addEventListener('pointerup', endPointer);
   map.addEventListener('pointercancel', endPointer);
-  // Si se arrastró el mapa, anular el click que se dispara después
-  map.addEventListener('click', (e) => { if (movedFar) { e.stopPropagation(); } }, true);
+  // Tap para seleccionar/colocar: se detecta con elementFromPoint en pointerup.
+  // (El setPointerCapture del arrastre desvía el 'click' hacia el mapa, así
+  // que no se puede confiar en el listener de 'click' de cada país.)
+  map.addEventListener('pointerup', (e) => {
+    if (movedFar || pointers.size !== 0) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const g = el && el.closest && el.closest('.country');
+    if (g && g.dataset.id) onCountryTap(g.dataset.id);
+  });
   map.addEventListener('wheel', (e) => {
     e.preventDefault();
     const c = clientToSvg(e.clientX, e.clientY);
@@ -871,12 +879,15 @@
   // ------------------------------------------------------------ dados
   socket.on('combat', (c) => {
     diceQueue.push(c);
-    if (!diceShowing) nextDice();
+    if (!diceTimer) showNextDice();
   });
-  function nextDice() {
+  function showNextDice() {
     const c = diceQueue.shift();
-    if (!c) { diceShowing = false; $('dice-modal').classList.add('hidden'); return; }
-    diceShowing = true;
+    if (!c) {
+      diceTimer = null;
+      $('dice-modal').classList.add('hidden');
+      return;
+    }
     $('dice-title').textContent = `${c.fromName} ⚔ ${c.toName}`;
     $('dice-att-name').textContent = c.attacker.name;
     $('dice-def-name').textContent = c.defender.name;
@@ -887,7 +898,8 @@
       : `Bajas — ${c.attacker.name}: ${c.attacker.loss} · ${c.defender.name}: ${c.defender.loss}`;
     $('dice-result').style.color = c.conquered ? '#7ee2a0' : '#aeb6c4';
     $('dice-modal').classList.remove('hidden');
-    setTimeout(nextDice, 1900);
+    // Si hay más ataques en cola, dar el mínimo; si no, dejar el último más tiempo.
+    diceTimer = setTimeout(showNextDice, diceQueue.length ? DICE_MIN : DICE_MAX);
   }
   function renderDice(el, side) {
     el.innerHTML = '';
